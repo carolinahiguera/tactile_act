@@ -55,7 +55,8 @@ class DETRVAE(nn.Module):
         if backbones is not None:
             self.input_proj = nn.Conv2d(backbones[0].num_channels, hidden_dim, kernel_size=1)
             self.backbones = nn.ModuleList(backbones)
-            self.input_proj_robot_state = nn.Linear(14, hidden_dim)
+            # self.input_proj_robot_state = nn.Linear(14, hidden_dim)
+            self.input_proj_robot_state = nn.Linear(7, hidden_dim)
         else:
             # input_dim = 14 + 7 # robot_state + env_state
             self.input_proj_robot_state = nn.Linear(14, hidden_dim)
@@ -64,10 +65,11 @@ class DETRVAE(nn.Module):
             self.backbones = None
 
         # encoder extra parameters
+        action_dim = 7
         self.latent_dim = 32 # final size of latent z # TODO tune
         self.cls_embed = nn.Embedding(1, hidden_dim) # extra cls token embedding
-        self.encoder_action_proj = nn.Linear(14, hidden_dim) # project action to embedding
-        self.encoder_joint_proj = nn.Linear(14, hidden_dim)  # project qpos to embedding
+        self.encoder_action_proj = nn.Linear(action_dim, hidden_dim) # project action to embedding
+        self.encoder_joint_proj = nn.Linear(action_dim, hidden_dim)  # project qpos to embedding
         self.latent_proj = nn.Linear(hidden_dim, self.latent_dim*2) # project hidden state to latent std, var
         self.register_buffer('pos_table', get_sinusoid_encoding_table(1+1+num_queries, hidden_dim)) # [CLS], qpos, a_seq
 
@@ -117,17 +119,21 @@ class DETRVAE(nn.Module):
             # Image observation features and position embeddings
             all_cam_features = []
             all_cam_pos = []
+            # all_cam_features, all_cam_pos = self.backbones[0](image) # HARDCODED
             for cam_id, cam_name in enumerate(self.camera_names):
-                features, pos = self.backbones[0](image[:, cam_id]) # HARDCODED
-                features = features[0] # take the last layer feature
+                features, pos = self.backbones[0](image) # HARDCODED
+                cam_feature = features[cam_id]
                 pos = pos[0]
-                all_cam_features.append(self.input_proj(features))
+            #     features = features[0] # take the last layer feature
+            #     pos = pos[0]
+                # all_cam_features.append(self.input_proj(cam_feature))
+                all_cam_features.append(cam_feature)
                 all_cam_pos.append(pos)
             # proprioception features
             proprio_input = self.input_proj_robot_state(qpos)
             # fold camera dimension into width dimension
-            src = torch.cat(all_cam_features, axis=3)
-            pos = torch.cat(all_cam_pos, axis=3)
+            src = torch.cat(all_cam_features, axis=1)
+            pos = torch.cat(all_cam_pos, axis=1)
             hs = self.transformer(src, None, self.query_embed.weight, pos, latent_input, proprio_input, self.additional_pos_embed.weight)[0]
         else:
             qpos = self.input_proj_robot_state(qpos)
@@ -227,7 +233,8 @@ def build_encoder(args):
 
 
 def build(args):
-    state_dim = 14 # TODO hardcode
+    # state_dim = 14 # TODO hardcode
+    state_dim = 7 # TODO hardcode
 
     # From state
     # backbone = None # from state for now, no need for conv nets

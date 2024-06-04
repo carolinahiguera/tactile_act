@@ -63,6 +63,9 @@ def get_args_parser():
     parser.add_argument('--kl_weight', action='store', type=int, help='KL Weight', required=False)
     parser.add_argument('--chunk_size', action='store', type=int, help='chunk_size', required=False)
     parser.add_argument('--temporal_agg', action='store_true')
+    parser.add_argument('--ssl_model', action='store', type=str, help='ssl_model', required=True)
+    parser.add_argument('--checkpoint_encoder', action='store', type=str, help='checkpoint_encoder', required=True)
+    parser.add_argument('--train_encoder', action='store_true')
 
     return parser
 

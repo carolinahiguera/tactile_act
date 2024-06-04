@@ -14,6 +14,9 @@ from typing import Dict, List
 from util.misc import NestedTensor, is_main_process
 
 from .position_encoding import build_position_encoding
+from .tactile_backbone import TactileObsEncoder
+from tactile_ssl.ijepa.vision_transformer import vit_base as vit_ijepa
+from tactile_ssl.general.vision_transformer import vit_base as vit_dino
 
 import IPython
 e = IPython.embed
@@ -102,21 +105,46 @@ class Joiner(nn.Sequential):
 
     def forward(self, tensor_list: NestedTensor):
         xs = self[0](tensor_list)
-        out: List[NestedTensor] = []
-        pos = []
-        for name, x in xs.items():
-            out.append(x)
-            # position encoding
-            pos.append(self[1](x).to(x.dtype))
+        pos = self[1](xs).to(xs.dtype)
+        return xs, pos
+        # # out: List[NestedTensor] = []
+        # # pos = []
+        # # for name, x in xs.items():
+        # #     out.append(x)
+        # #     # position encoding
+        # #     pos.append(self[1](x).to(x.dtype))
 
-        return out, pos
+        # return out, pos
 
+
+# def build_backbone(args):
+#     position_embedding = build_position_encoding(args)
+#     train_backbone = args.lr_backbone > 0
+#     return_interm_layers = args.masks
+#     backbone = Backbone(args.backbone, train_backbone, return_interm_layers, args.dilation)
+#     model = Joiner(backbone, position_embedding)
+#     model.num_channels = backbone.num_channels
+#     return model
 
 def build_backbone(args):
+    if args.ssl_model == 'ijepa':
+        encoder = vit_ijepa(in_chans=6, patch_size=16)
+    elif args.ssl_model == 'dino':
+        encoder = vit_dino(in_chans=6, pos_embed_fn='sinusoidal', num_register_tokens='1')
+    elif args.ssl_model == 'mae':
+        encoder = vit_dino(in_chans=6, pos_embed_fn='sinusoidal')
+    else:
+        raise NotImplementedError(f"SSL model {args.ssl_model} not implemented")
+    
+    backbone = TactileObsEncoder(
+        encoder = encoder,
+        embed_dim = 768,
+        checkpoint_encoder = args.checkpoint_encoder,
+        train_encoder = args.train_encoder,
+    )
+
     position_embedding = build_position_encoding(args)
-    train_backbone = args.lr_backbone > 0
-    return_interm_layers = args.masks
-    backbone = Backbone(args.backbone, train_backbone, return_interm_layers, args.dilation)
     model = Joiner(backbone, position_embedding)
-    model.num_channels = backbone.num_channels
+    # model.num_channels = encoder.patch_embed.num_patches
+    model.num_channels = encoder.embed_dim
     return model

@@ -3,9 +3,31 @@ import torch
 import os
 import h5py
 from torch.utils.data import TensorDataset, DataLoader
+from torchvision import transforms
+import matplotlib.pyplot as plt
+from PIL import Image
+import cv2
 
 import IPython
 e = IPython.embed
+
+def compute_diff(img1, img2, offset=0.0):
+    img1 = np.int32(img1)
+    img2 = np.int32(img2)
+    diff = img1 - img2
+    diff = diff / 255.0 + offset
+    diff = np.clip(diff, 0.0, 1.0)
+    diff = np.uint8(diff * 255.0)
+    return diff
+
+def get_resize_transform(img_size=(224, 224)):
+    t = transforms.Compose(
+        [
+            transforms.Resize((img_size[0], img_size[1]), antialias=True),
+            transforms.ToTensor(),  # converts to [0 - 1]
+        ]
+    )
+    return t
 
 class EpisodicDataset(torch.utils.data.Dataset):
     def __init__(self, episode_ids, dataset_dir, camera_names, norm_stats):
@@ -15,6 +37,11 @@ class EpisodicDataset(torch.utils.data.Dataset):
         self.camera_names = camera_names
         self.norm_stats = norm_stats
         self.is_sim = None
+        self.bg_thumb = cv2.imread('./assets/digit/digit_thumb.jpg')
+        self.bg_thumb = cv2.cvtColor(self.bg_thumb, cv2.COLOR_BGR2RGB)
+        self.bg_index = cv2.imread('./assets/digit/digit_index.jpg')
+        self.bg_index = cv2.cvtColor(self.bg_index, cv2.COLOR_BGR2RGB)
+        self.transform_resize = get_resize_transform()
         self.__getitem__(0) # initialize self.is_sim
 
     def __len__(self):
@@ -22,6 +49,8 @@ class EpisodicDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, index):
         sample_full_episode = False # hardcode
+
+        max_len = 500
 
         episode_id = self.episode_ids[index]
         dataset_path = os.path.join(self.dataset_dir, f'episode_{episode_id}.hdf5')
@@ -38,7 +67,11 @@ class EpisodicDataset(torch.utils.data.Dataset):
             qvel = root['/observations/qvel'][start_ts]
             image_dict = dict()
             for cam_name in self.camera_names:
-                image_dict[cam_name] = root[f'/observations/images/{cam_name}'][start_ts]
+                img_t0 = root[f'/observations/images/{cam_name}'][start_ts]
+                img_t5 = root[f'/observations/images/{cam_name}'][np.clip(start_ts - 5, 0, episode_len - 1)]
+                img_t0 = self._get_tactile_image(img_t0, bg=self.bg_thumb if cam_name == 'digit_thumb' else self.bg_index)
+                img_t5 = self._get_tactile_image(img_t5, bg=self.bg_thumb if cam_name == 'digit_thumb' else self.bg_index)
+                image_dict[cam_name] = torch.cat([img_t0, img_t5], dim=0)
             # get all actions after and including start_ts
             if is_sim:
                 action = root['/action'][start_ts:]
@@ -50,7 +83,9 @@ class EpisodicDataset(torch.utils.data.Dataset):
         self.is_sim = is_sim
         padded_action = np.zeros(original_action_shape, dtype=np.float32)
         padded_action[:action_len] = action
-        is_pad = np.zeros(episode_len)
+        padded_action = padded_action[:max_len]
+        # is_pad = np.zeros(episode_len)
+        is_pad = np.zeros(max_len)
         is_pad[action_len:] = 1
 
         # new axis for different cameras
@@ -66,15 +101,21 @@ class EpisodicDataset(torch.utils.data.Dataset):
         is_pad = torch.from_numpy(is_pad).bool()
 
         # channel last
-        image_data = torch.einsum('k h w c -> k c h w', image_data)
+        # image_data = torch.einsum('k h w c -> k c h w', image_data)
 
         # normalize image and change dtype to float
-        image_data = image_data / 255.0
+        # image_data = image_data / 255.0
         action_data = (action_data - self.norm_stats["action_mean"]) / self.norm_stats["action_std"]
         qpos_data = (qpos_data - self.norm_stats["qpos_mean"]) / self.norm_stats["qpos_std"]
 
         return image_data, qpos_data, action_data, is_pad
 
+    def _get_tactile_image(self, img, bg=None):
+        if bg is not None:
+            img = compute_diff(img, bg, offset=0.5)
+        img = Image.fromarray(img)
+        img = self.transform_resize(img)
+        return img
 
 def get_norm_stats(dataset_dir, num_episodes):
     all_qpos_data = []
@@ -87,18 +128,22 @@ def get_norm_stats(dataset_dir, num_episodes):
             action = root['/action'][()]
         all_qpos_data.append(torch.from_numpy(qpos))
         all_action_data.append(torch.from_numpy(action))
-    all_qpos_data = torch.stack(all_qpos_data)
-    all_action_data = torch.stack(all_action_data)
+    all_qpos_data = torch.concatenate(all_qpos_data)
+    all_action_data = torch.concatenate(all_action_data)
     all_action_data = all_action_data
 
     # normalize action data
-    action_mean = all_action_data.mean(dim=[0, 1], keepdim=True)
-    action_std = all_action_data.std(dim=[0, 1], keepdim=True)
+    # action_mean = all_action_data.mean(dim=[0, 1], keepdim=True)
+    # action_std = all_action_data.std(dim=[0, 1], keepdim=True)
+    action_mean = all_action_data.mean(dim=0, keepdim=True)
+    action_std = all_action_data.std(dim=0, keepdim=True)
     action_std = torch.clip(action_std, 1e-2, np.inf) # clipping
 
     # normalize qpos data
-    qpos_mean = all_qpos_data.mean(dim=[0, 1], keepdim=True)
-    qpos_std = all_qpos_data.std(dim=[0, 1], keepdim=True)
+    # qpos_mean = all_qpos_data.mean(dim=[0, 1], keepdim=True)
+    # qpos_std = all_qpos_data.std(dim=[0, 1], keepdim=True)
+    qpos_mean = all_qpos_data.mean(dim=0, keepdim=True)
+    qpos_std = all_qpos_data.std(dim=0, keepdim=True)
     qpos_std = torch.clip(qpos_std, 1e-2, np.inf) # clipping
 
     stats = {"action_mean": action_mean.numpy().squeeze(), "action_std": action_std.numpy().squeeze(),

@@ -6,20 +6,22 @@ from detr.main import build_ACT_model_and_optimizer, build_CNNMLP_model_and_opti
 import IPython
 e = IPython.embed
 
-class ACTPolicy(nn.Module):
-    def __init__(self, args_override):
+class SSL_ACT_Policy(nn.Module):
+    def __init__(self, args_override, wandb_logger=None):
         super().__init__()
         model, optimizer = build_ACT_model_and_optimizer(args_override)
         self.model = model # CVAE decoder
         self.optimizer = optimizer
         self.kl_weight = args_override['kl_weight']
-        print(f'KL Weight {self.kl_weight}')
+        # self.wandb_logger = wandb_logger
+        # self.step = 0
+        # print(f'KL Weight {self.kl_weight}')
 
     def __call__(self, qpos, image, actions=None, is_pad=None):
         env_state = None
-        # normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-        #                                  std=[0.229, 0.224, 0.225])
-        # image = normalize(image)
+        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                         std=[0.229, 0.224, 0.225])
+        image = normalize(image)
         if actions is not None: # training time
             actions = actions[:, :self.model.num_queries]
             is_pad = is_pad[:, :self.model.num_queries]
